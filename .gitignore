@@ -1,0 +1,9 @@
+.vs/
+bin/
+Library/
+ModRelease/
+obj/
+source/
+ADOFAI-Macro-Internal.zip
+build.bat
+Inspect.exe
