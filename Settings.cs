@@ -7,15 +7,17 @@ namespace ADOFAI_Macro_Internal
     {
         public bool EnableAutoplay = true;
         public int TimingOffsetMs = 0;
-        public bool EnableHumanSpoof = true;
+        public bool EnableHumanSpoof = false;
         public float SpoofJitterMs = 0.0f;
-        public string Language = "VI";
+        public string Language = "EN";
         public int RollStyle = 0;
         public float RandomRollIntervalSec = 0.0f;
         public int MainHand = 1;
         public int FingersPerHand = 0;
-        public double OneHandBPM = 1000.0;
+        public double OneHandBPM = 500.0;
         public double MinPressBPM = 1000.0;
+        public int HoldReleaseOffsetMs = 0;
+        public bool AutoClearCacheOnMapChange = true;
         public KeyCode[] Keys = new KeyCode[32];
 
         public override void Save(UnityModManager.ModEntry modEntry)
@@ -24,7 +26,6 @@ namespace ADOFAI_Macro_Internal
         }
 
         public void OnChange()
-        {
-        }
+        {}
     }
 }

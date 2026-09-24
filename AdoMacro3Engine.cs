@@ -6,7 +6,7 @@ namespace ADOFAI_Macro_Internal
 {
     public static class AdoMacro3Engine
     {
-        public static double OneHandBPM => (Main.Settings != null ? Main.Settings.OneHandBPM : 500.0);
+        public static double OneHandBPM => (Main.Settings != null ? Main.Settings.OneHandBPM : 400.0);
         public static double MinPressBPM => (Main.Settings != null ? Main.Settings.MinPressBPM : 200.0);
         public static int FingerNumber => (Main.Settings != null && Main.Settings.FingersPerHand > 0) ? Math.Min(16, Math.Max(1, Main.Settings.FingersPerHand)) : 16;
         public const int LeftKeysCount = 16;

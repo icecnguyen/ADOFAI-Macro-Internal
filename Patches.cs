@@ -18,6 +18,78 @@ namespace ADOFAI_Macro_Internal
         static Dictionary<int, byte> floorToKeyMap = new Dictionary<int, byte>();
         static Dictionary<int, double> floorToSameKeyDiff = new Dictionary<int, double>();
         static int lastProcessedFloorCount = -1;
+        static string lastProcessedLevelKey = "";
+
+        public static string GetCurrentLevelKey()
+        {
+            try
+            {
+                var gcsType = AccessTools.TypeByName("GCS");
+                if (gcsType != null)
+                {
+                    var field = AccessTools.Field(gcsType, "customLevelPaths");
+                    if (field != null)
+                    {
+                        var paths = field.GetValue(null) as string[];
+                        if (paths != null && paths.Length > 0 && !string.IsNullOrEmpty(paths[0]))
+                        {
+                            return paths[0];
+                        }
+                    }
+                }
+            }
+            catch
+            {}
+            if (ADOBase.lm != null && ADOBase.lm.listFloors != null)
+            {
+                int count = ADOBase.lm.listFloors.Count;
+                double firstTime = (count > 0 && ADOBase.lm.listFloors[0] != null) ? ADOBase.lm.listFloors[0].entryTime : 0;
+                double lastTime = (count > 1 && ADOBase.lm.listFloors[count - 1] != null) ? ADOBase.lm.listFloors[count - 1].entryTime : 0;
+                return $"{ADOBase.sceneName}_{count}_{firstTime:F3}_{lastTime:F3}";
+            }
+            return ADOBase.sceneName ?? "default";
+        }
+
+        public static void ClearAllCaches(bool clearDiskCache = false)
+        {
+            floorToKeyMap.Clear();
+            floorToSameKeyDiff.Clear();
+            lastHitFloor = -1;
+            lastTargetTime = 0;
+            cachedTargetSeqID = -1;
+            cachedSpoofOffset = 0.0;
+            lastProcessedFloorCount = -1;
+            lastProcessedLevelKey = "";
+            if (clearDiskCache)
+            {
+                ClearDiskCache();
+            }
+        }
+
+        public static void ClearDiskCache()
+        {
+            try
+            {
+                if (Main.Mod != null && !string.IsNullOrEmpty(Main.Mod.Path))
+                {
+                    string cacheDir = Path.Combine(Main.Mod.Path, "Cache");
+                    if (Directory.Exists(cacheDir))
+                    {
+                        string[] files = Directory.GetFiles(cacheDir, "*.json");
+                        foreach (string file in files)
+                        {
+                            try
+                            {
+                                File.Delete(file);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
+            catch
+            {}
+        }
 
         private static double GetGaussianRandom(double mean, double stdDev)
         {
@@ -26,7 +98,6 @@ namespace ADOFAI_Macro_Internal
             {
                 u1 = 0.000001;
             }
-
             double u2 = 1.0 - (double)UnityEngine.Random.value;
             double randStdNormal = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
             return mean + stdDev * randStdNormal;
@@ -36,64 +107,50 @@ namespace ADOFAI_Macro_Internal
         {
             floorToKeyMap.Clear();
             floorToSameKeyDiff.Clear();
-
             if (ADOBase.lm == null || ADOBase.lm.listFloors == null)
             {
                 return;
             }
-
             lastProcessedFloorCount = ADOBase.lm.listFloors.Count;
             HashSet<int> holdReleaseFloors = new HashSet<int>();
-
             for (int i = 0; i < ADOBase.lm.listFloors.Count; i++)
             {
                 scrFloor f = ADOBase.lm.listFloors[i];
-
                 if (f != null && f.holdLength > -1)
                 {
                     scrFloor tail = f.nextfloor;
-
                     while (tail != null && (tail.midSpin || tail.auto))
                     {
                         tail = tail.nextfloor;
                     }
-
                     if (tail != null && tail.holdLength == -1)
                     {
                         holdReleaseFloors.Add(tail.seqID);
                     }
                 }
             }
-
             var validTiles = new List<scrFloor>();
-
             for (int i = 0; i < ADOBase.lm.listFloors.Count; i++)
             {
                 scrFloor f = ADOBase.lm.listFloors[i];
-
                 if (f != null && !f.midSpin && !f.auto && !holdReleaseFloors.Contains(f.seqID))
                 {
                     validTiles.Add(f);
                 }
             }
-
             if (validTiles.Count == 0)
             {
                 return;
             }
-
             var inputList = AdoMacro3Engine.GenerateInputList(validTiles);
-
             for (int i = 0; i < validTiles.Count && i < inputList.Count; i++)
             {
                 floorToKeyMap[validTiles[i].seqID] = inputList[i].vkCode;
             }
-
             for (int i = 0; i < validTiles.Count && i < inputList.Count; i++)
             {
                 byte vk = inputList[i].vkCode;
                 double nextSameTime = -1;
-
                 for (int j = i + 1; j < validTiles.Count && j < inputList.Count && j < i + 128; j++)
                 {
                     if (inputList[j].vkCode == vk)
@@ -102,10 +159,8 @@ namespace ADOFAI_Macro_Internal
                         break;
                     }
                 }
-
                 floorToSameKeyDiff[validTiles[i].seqID] = nextSameTime > 0 ? nextSameTime : 2.0;
             }
-
             SaveJsonCacheAsync(validTiles, inputList);
         }
 
@@ -119,15 +174,12 @@ namespace ADOFAI_Macro_Internal
                     try
                     {
                         var gcsType = AccessTools.TypeByName("GCS");
-
                         if (gcsType != null)
                         {
                             var field = AccessTools.Field(gcsType, "customLevelPaths");
-
                             if (field != null)
                             {
                                 var paths = field.GetValue(null) as string[];
-
                                 if (paths != null && paths.Length > 0 && !string.IsNullOrEmpty(paths[0]))
                                 {
                                     levelName = Path.GetFileNameWithoutExtension(paths[0]);
@@ -137,19 +189,15 @@ namespace ADOFAI_Macro_Internal
                     }
                     catch
                     {}
-
                     foreach (char c in Path.GetInvalidFileNameChars())
                     {
                         levelName = levelName.Replace(c, '_');
                     }
-
                     string cacheDir = Path.Combine(Main.Mod.Path, "Cache");
-
                     if (!Directory.Exists(cacheDir))
                     {
                         Directory.CreateDirectory(cacheDir);
                     }
-
                     string filePath = Path.Combine(cacheDir, levelName + ".json");
                     StringBuilder sb = new StringBuilder();
                     sb.AppendLine("{");
@@ -161,7 +209,6 @@ namespace ADOFAI_Macro_Internal
                     sb.AppendLine($"  \"mappedFloors\": {floorToKeyMap.Count},");
                     sb.AppendLine($"  \"generatedAt\": \"{DateTime.UtcNow:O}\",");
                     sb.AppendLine("  \"notes\": [");
-
                     for (int i = 0; i < validTiles.Count && i < notes.Count; i++)
                     {
                         var f = validTiles[i];
@@ -177,7 +224,6 @@ namespace ADOFAI_Macro_Internal
                         if (i < validTiles.Count - 1 && i < notes.Count - 1) sb.Append(",");
                         sb.AppendLine();
                     }
-
                     sb.AppendLine("  ]");
                     sb.AppendLine("}");
                     File.WriteAllText(filePath, sb.ToString(), Encoding.UTF8);
@@ -193,10 +239,7 @@ namespace ADOFAI_Macro_Internal
         {
             public static void Postfix()
             {
-                lastHitFloor = -1;
-                lastTargetTime = 0;
-                cachedTargetSeqID = -1;
-                cachedSpoofOffset = 0.0;
+                ClearAllCaches(clearDiskCache: Main.Settings != null && Main.Settings.AutoClearCacheOnMapChange);
             }
         }
 
@@ -210,11 +253,23 @@ namespace ADOFAI_Macro_Internal
                 lastTargetTime = 0;
                 cachedTargetSeqID = -1;
                 cachedSpoofOffset = 0.0;
-
                 if (Main.Settings != null && Main.Settings.RollStyle == 4)
                 {
                     PreprocessLevel();
                 }
+            }
+        }
+
+        [HarmonyPatch(typeof(scrController), "FailAction")]
+
+        public static class scrController_FailAction_Patch
+        {
+            public static void Postfix()
+            {
+                lastHitFloor = -1;
+                lastTargetTime = 0;
+                cachedTargetSeqID = -1;
+                cachedSpoofOffset = 0.0;
             }
         }
 
@@ -230,23 +285,26 @@ namespace ADOFAI_Macro_Internal
                     {
                         return;
                     }
-
                     if (__instance.paused || __instance.audioPaused)
                     {
                         return;
                     }
-
                     if (ADOBase.lm == null || ADOBase.lm.listFloors == null || ADOBase.conductor == null)
                     {
                         return;
                     }
-
                     int currentFloor = (__instance.currFloor != null) ? __instance.currFloor.seqID : __instance.currentSeqID;
-                    bool isNewLevel = (floorToKeyMap.Count == 0 || lastProcessedFloorCount != ADOBase.lm.listFloors.Count);
-                    bool isRestart = (currentFloor == 0 && lastHitFloor >= 0) || (lastHitFloor != -1 && currentFloor < lastHitFloor - 1);
-
+                    string currentLevelKey = GetCurrentLevelKey();
+                    bool isLevelChanged = (!string.IsNullOrEmpty(currentLevelKey) && currentLevelKey != lastProcessedLevelKey);
+                    bool isNewLevel = (floorToKeyMap.Count == 0 || lastProcessedFloorCount != ADOBase.lm.listFloors.Count || isLevelChanged);
+                    bool isRestart = (currentFloor == 0 && lastHitFloor > 5) || (lastHitFloor != -1 && currentFloor < lastHitFloor - 10);
                     if (isNewLevel)
                     {
+                        if (isLevelChanged && Main.Settings != null && Main.Settings.AutoClearCacheOnMapChange)
+                        {
+                            ClearDiskCache();
+                        }
+                        lastProcessedLevelKey = currentLevelKey;
                         lastHitFloor = -1;
                         lastTargetTime = 0;
                         cachedTargetSeqID = -1;
@@ -259,48 +317,38 @@ namespace ADOFAI_Macro_Internal
                         lastTargetTime = 0;
                         cachedTargetSeqID = -1;
                         cachedSpoofOffset = 0.0;
-
                         if (Main.Settings != null && Main.Settings.RollStyle == 4)
                         {
                             PreprocessLevel();
                         }
                     }
-
-                    int floorToCheck = (lastHitFloor == -1 || lastHitFloor < currentFloor - 2 || lastHitFloor > currentFloor + 15) ? currentFloor : lastHitFloor;
+                    int floorToCheck = (lastHitFloor == -1) ? currentFloor : lastHitFloor;
                     int iterations = 0;
-
                     while (floorToCheck >= 0 && floorToCheck < ADOBase.lm.listFloors.Count && iterations < 16)
                     {
                         iterations++;
                         scrFloor currFloorObj = ADOBase.lm.listFloors[floorToCheck];
-
                         if (currFloorObj == null || currFloorObj.nextfloor == null)
                         {
                             break;
                         }
-
                         scrFloor nextFloor = currFloorObj.nextfloor;
-
                         while (nextFloor != null && (nextFloor.midSpin || nextFloor.auto))
                         {
                             nextFloor = nextFloor.nextfloor;
                         }
-
                         if (nextFloor == null || nextFloor.midSpin || nextFloor.auto)
                         {
                             break;
                         }
-
                         double targetTime = nextFloor.entryTime;
                         double currentTime = ADOBase.conductor.songposition_minusi;
                         double totalOffsetMs = Main.Settings.TimingOffsetMs;
                         double offsetSeconds = totalOffsetMs / 1000.0;
                         double frameLead = Math.Max(0.001, (double)Time.unscaledDeltaTime * 0.5) + 0.0015;
-
                         if (nextFloor.seqID != cachedTargetSeqID)
                         {
                             cachedTargetSeqID = nextFloor.seqID;
-
                             if (Main.Settings.EnableHumanSpoof && Main.Settings.SpoofJitterMs > 0.01f)
                             {
                                 double frameCompMs = Math.Min(8.0, Math.Max(2.0, (double)(Time.unscaledDeltaTime * 500.0) + 1.2));
@@ -314,49 +362,54 @@ namespace ADOFAI_Macro_Internal
                                 cachedSpoofOffset = 0.0;
                             }
                         }
-
                         double spoof = Main.Settings.EnableHumanSpoof ? cachedSpoofOffset : 0.0;
-
                         if (currentTime + frameLead >= targetTime + offsetSeconds + spoof)
                         {
                             double timeDiffToNext = 0.5;
                             scrFloor lookAhead = nextFloor.nextfloor;
-
                             while (lookAhead != null && (lookAhead.midSpin || lookAhead.auto))
                             {
                                 lookAhead = lookAhead.nextfloor;
                             }
-
                             if (lookAhead != null)
                             {
                                 timeDiffToNext = lookAhead.entryTime - nextFloor.entryTime;
                             }
-
                             double holdTimeOverride = -1;
-
                             if (nextFloor.holdLength > -1 && lookAhead != null)
                             {
-                                double timeUntilNextTarget = (lookAhead.entryTime + offsetSeconds) - currentTime;
-                                holdTimeOverride = Math.Max(0.005, timeUntilNextTarget + 0.0015);
+                                double remainingToHoldEnd = (lookAhead.entryTime + offsetSeconds) - currentTime;
+                                double holdOffsetSec = (Main.Settings != null ? Main.Settings.HoldReleaseOffsetMs : 0) / 1000.0;
+                                remainingToHoldEnd += holdOffsetSec;
+                                if (lookAhead.holdLength > -1)
+                                {
+                                    double earlyBonus = Math.Min(0.03, remainingToHoldEnd * 0.5);
+                                    holdTimeOverride = Math.Max(0.01, remainingToHoldEnd + earlyBonus);
+                                }
+                                else
+                                {
+                                    holdTimeOverride = Math.Max(0.01, remainingToHoldEnd - 0.005);
+                                }
                             }
-
                             double prevTimeDiff = targetTime - lastTargetTime;
                             lastTargetTime = targetTime;
-
-                            if (nextFloor.holdLength > -1 && lookAhead != null && lookAhead.holdLength == -1)
+                            if (nextFloor.holdLength > -1 && lookAhead != null)
                             {
-                                lastHitFloor = lookAhead.seqID;
-                                floorToCheck = lastHitFloor;
-                                lastTargetTime = lookAhead.entryTime;
+                                if (lookAhead.holdLength == -1)
+                                {
+                                    lastHitFloor = lookAhead.seqID;
+                                }
+                                else
+                                {
+                                    lastHitFloor = lookAhead.seqID - 1;
+                                }
                             }
                             else
                             {
                                 lastHitFloor = nextFloor.seqID;
-                                floorToCheck = lastHitFloor;
                             }
-
+                            floorToCheck = lastHitFloor;
                             byte vkCode = 0xDD;
-
                             if (floorToKeyMap.TryGetValue(nextFloor.seqID, out byte mappedKey))
                             {
                                 vkCode = mappedKey;
@@ -365,14 +418,11 @@ namespace ADOFAI_Macro_Internal
                             {
                                 vkCode = InputSimulator.UnityKeyCodeToVK(Main.Settings.Keys[0] != KeyCode.None ? Main.Settings.Keys[0] : KeyCode.E);
                             }
-
                             double timeDiffToSameKey = timeDiffToNext;
-
                             if (floorToSameKeyDiff.TryGetValue(nextFloor.seqID, out double diff))
                             {
                                 timeDiffToSameKey = diff;
                             }
-
                             InputSimulator.SimulateKeyPressByVK(vkCode, timeDiffToSameKey, holdTimeOverride, prevTimeDiff);
                         }
                         else

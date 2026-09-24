@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace ADOFAI_Macro_Internal
@@ -70,7 +71,6 @@ namespace ADOFAI_Macro_Internal
             {
                 VkToScanMap[i] = (byte)MapVirtualKey(i, 0);
             }
-
             StartKeyReleaserThread();
         }
 
@@ -80,7 +80,6 @@ namespace ADOFAI_Macro_Internal
             {
                 return;
             }
-
             _isRunning = true;
             _releaserThread = new Thread(KeyReleaserLoop) { IsBackground = true, Priority = System.Threading.ThreadPriority.AboveNormal, Name = "ADOFAI_FastKeyReleaser" };
             _releaserThread.Start();
@@ -89,34 +88,28 @@ namespace ADOFAI_Macro_Internal
         private static void KeyReleaserLoop()
         {
             var pendingList = new List<KeyReleaseItem>(64);
-
             while (_isRunning)
             {
                 while (ReleaseQueue.TryDequeue(out KeyReleaseItem item))
                 {
                     pendingList.Add(item);
                 }
-
                 if (pendingList.Count == 0)
                 {
                     ReleaseEvent.WaitOne(10);
                     continue;
                 }
-
                 long nowTicks = Stopwatch.GetTimestamp();
                 long nextReleaseTicks = long.MaxValue;
-
                 for (int i = pendingList.Count - 1; i >= 0; i--)
                 {
                     var item = pendingList[i];
-
                     if (nowTicks >= item.releaseTimestampTicks)
                     {
                         if (item.generation == KeyGeneration[item.vkCode])
                         {
                             keybd_event(item.vkCode, item.scanCode, item.dwFlags | KEYEVENTF_KEYUP, 0);
                         }
-
                         pendingList.RemoveAt(i);
                     }
                     else
@@ -127,12 +120,10 @@ namespace ADOFAI_Macro_Internal
                         }
                     }
                 }
-
                 if (pendingList.Count > 0)
                 {
                     long remainingTicks = nextReleaseTicks - Stopwatch.GetTimestamp();
                     double remainingMs = (double)remainingTicks * 1000.0 / Stopwatch.Frequency;
-
                     if (remainingMs > 1.5)
                     {
                         Thread.Sleep(1);
@@ -151,64 +142,86 @@ namespace ADOFAI_Macro_Internal
             {
                 return;
             }
-
             byte scanCode = VkToScanMap[vkCode];
-            int holdDuration;
-
+            uint extFlags = IsExtendedKey(vkCode) ? (uint)KEYEVENTF_EXTENDEDKEY : 0;
             if (holdTimeOverride > 0)
             {
-                holdDuration = (int)Math.Round(holdTimeOverride * 1000.0);
-            }
-            else
-            {
-                double bpm = (Main.Settings != null && Main.Settings.MinPressBPM > 0.0001) ? Main.Settings.MinPressBPM : 500.0;
-                holdDuration = (int)Math.Round(60000.0 / bpm);
-                int sameKeyDiffMs = (int)(timeDiffToNextSameKey * 1000.0);
-
-                if (sameKeyDiffMs > 6)
+                int holdDuration = (int)Math.Round(holdTimeOverride * 1000.0);
+                keybd_event(vkCode, scanCode, extFlags | KEYEVENTF_KEYDOWN, 0);
+                Stopwatch swHold = Stopwatch.StartNew();
+                Task.Run(() =>
                 {
-                    if (holdDuration >= sameKeyDiffMs)
+                    while (swHold.ElapsedMilliseconds < holdDuration)
                     {
-                        holdDuration = Math.Max(4, sameKeyDiffMs - 4);
+                        Thread.SpinWait(10);
                     }
-                }
-                else if (sameKeyDiffMs > 0)
+                    keybd_event(vkCode, scanCode, extFlags | KEYEVENTF_KEYUP, 0);
+                });
+                return;
+            }
+            double bpm = (Main.Settings != null && Main.Settings.MinPressBPM > 0.0001) ? Main.Settings.MinPressBPM : 500.0;
+            int holdDurationNormal = (int)Math.Round(60000.0 / bpm);
+            int sameKeyDiffMs = (int)(timeDiffToNextSameKey * 1000.0);
+            if (sameKeyDiffMs > 6)
+            {
+                if (holdDurationNormal >= sameKeyDiffMs)
                 {
-                    holdDuration = Math.Max(2, sameKeyDiffMs - 1);
-                }
-
-                if (Main.Settings != null && Main.Settings.EnableHumanSpoof && Main.Settings.SpoofJitterMs > 0.01f)
-                {
-                    int microJitter = UnityEngine.Random.Range(-1, 2);
-                    holdDuration = Math.Max(2, holdDuration + microJitter);
+                    holdDurationNormal = Math.Max(4, sameKeyDiffMs - 4);
                 }
             }
-
-            uint extFlags = IsExtendedKey(vkCode) ? (uint)KEYEVENTF_EXTENDEDKEY : 0;
+            else if (sameKeyDiffMs > 0)
+            {
+                holdDurationNormal = Math.Max(2, sameKeyDiffMs - 1);
+            }
+            if (Main.Settings != null && Main.Settings.EnableHumanSpoof && Main.Settings.SpoofJitterMs > 0.01f)
+            {
+                int microJitter = UnityEngine.Random.Range(-1, 2);
+                holdDurationNormal = Math.Max(2, holdDurationNormal + microJitter);
+            }
             int gen = Interlocked.Increment(ref KeyGeneration[vkCode]);
             keybd_event(vkCode, scanCode, extFlags | KEYEVENTF_KEYDOWN, 0);
-
-            if (holdDuration <= 0)
+            if (holdDurationNormal <= 0)
             {
                 keybd_event(vkCode, scanCode, extFlags | KEYEVENTF_KEYUP, 0);
             }
             else
             {
-                long releaseTimestamp = Stopwatch.GetTimestamp() + (long)((double)holdDuration * Stopwatch.Frequency / 1000.0);
+                long releaseTimestamp = Stopwatch.GetTimestamp() + (long)((double)holdDurationNormal * Stopwatch.Frequency / 1000.0);
                 ReleaseQueue.Enqueue(new KeyReleaseItem { vkCode = vkCode, scanCode = scanCode, dwFlags = extFlags, releaseTimestampTicks = releaseTimestamp, generation = gen });
                 ReleaseEvent.Set();
             }
         }
 
+        public static void PressKeyDownNative(byte vkCode)
+        {
+            if (vkCode == 0)
+            {
+                return;
+            }
+            byte scanCode = VkToScanMap[vkCode];
+            uint extFlags = IsExtendedKey(vkCode) ? (uint)KEYEVENTF_EXTENDEDKEY : 0;
+            Interlocked.Increment(ref KeyGeneration[vkCode]);
+            keybd_event(vkCode, scanCode, extFlags | KEYEVENTF_KEYDOWN, 0);
+        }
+
+        public static void ReleaseKeyNative(byte vkCode)
+        {
+            if (vkCode == 0)
+            {
+                return;
+            }
+            byte scanCode = VkToScanMap[vkCode];
+            uint extFlags = IsExtendedKey(vkCode) ? (uint)KEYEVENTF_EXTENDEDKEY : 0;
+            keybd_event(vkCode, scanCode, extFlags | KEYEVENTF_KEYUP, 0);
+        }
+
         public static byte UnityKeyCodeToVK(KeyCode keyCode)
         {
             int kc = (int)keyCode;
-
             if (kc >= 97 && kc <= 122)
             {
                 return (byte)(kc - 32);
             }
-
             if (kc >= 48 && kc <= 57)
             {
                 return (byte)kc;
@@ -217,17 +230,14 @@ namespace ADOFAI_Macro_Internal
             {
                 return (byte)(kc - 256 + 0x60);
             }
-
             if (kc >= 282 && kc <= 293)
             {
                 return (byte)(kc - 282 + 0x70);
             }
-
             if (kc >= 294 && kc <= 296)
             {
                 return (byte)(kc - 294 + 0x7C);
             }
-
             switch (keyCode)
             {
                 case KeyCode.KeypadPeriod: return 0x6E;
